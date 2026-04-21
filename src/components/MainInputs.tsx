@@ -1,105 +1,157 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Settings } from '../utils/CostCalculator';
 
 interface MainInputsProps {
+  title: string;
   settings: Settings;
   availableCities: string[];
   onSettingChange: (key: keyof Settings, value: unknown) => void;
 }
 
-const MainInputs: React.FC<MainInputsProps> = ({ settings, availableCities, onSettingChange }) => {
-  const [salaryInput, setSalaryInput] = useState(settings.salary.toString());
+const fieldClass =
+  'w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-slate-400';
+const labelClass = 'mb-1.5 text-sm font-medium text-slate-700';
+
+const MainInputs: React.FC<MainInputsProps> = ({ title, settings, availableCities, onSettingChange }) => {
+  const [salaryInput, setSalaryInput] = useState(String(settings.salary));
+  const [bonusInput, setBonusInput] = useState(String(settings.annualBonus));
   const [housingFundInput, setHousingFundInput] = useState((parseFloat(settings.housingFundRate) * 100).toString());
 
-  // 当settings.salary从外部变化时，更新salaryInput
-  useEffect(() => {
-    // 只在组件挂载时或settings.salary变化时执行
-    // 避免在输入为空时将其设置为"0"
-    if (settings.salary > 0) {
-      setSalaryInput(settings.salary.toString());
-    }
-  }, [settings.salary]);
-
-  // 当settings.housingFundRate从外部变化时，更新housingFundInput
-  useEffect(() => {
-    setHousingFundInput((parseFloat(settings.housingFundRate) * 100).toString());
-  }, [settings.housingFundRate]);
-
-  const handleSalaryChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const value = e.target.value;
-    setSalaryInput(value);
-    
-    // 只有当输入不为空时，才将其转换为数字并更新全局状态
-    if (value !== '') {
-      onSettingChange('salary', Number(value));
-    } else {
-      // 当输入为空时，保持输入框为空，但设置salary为0
-      onSettingChange('salary', 0);
-    }
-  };
-
-  const handleHousingFundChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const value = e.target.value;
-    setHousingFundInput(value);
-    
-    if (value !== '') {
-      // 将百分比转换为小数，例如 8% -> 0.08
-      const percent = Number(value);
-      if (percent >= 5 && percent <= 12) {
-        onSettingChange('housingFundRate', (percent / 100).toString());
-      }
-    }
-  };
+  useEffect(() => setSalaryInput(String(settings.salary)), [settings.salary]);
+  useEffect(() => setBonusInput(String(settings.annualBonus)), [settings.annualBonus]);
+  useEffect(() => setHousingFundInput((parseFloat(settings.housingFundRate) * 100).toString()), [settings.housingFundRate]);
 
   return (
-    <div className="main-inputs grid grid-cols-1 md:grid-cols-3 gap-3 md:gap-4 p-3 md:p-4 bg-white dark:bg-gray-800 rounded-lg shadow-sm">
-      <div className="flex flex-col">
-        <label htmlFor="sourceCity" className="text-xs md:text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">选择基准城市</label>
-        <select 
-          id="sourceCity" 
-          className="border border-gray-300 dark:border-gray-600 rounded-md py-1 md:py-2 px-2 md:px-3 text-xs md:text-sm bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-          value={settings.sourceCity} 
-          onChange={(e) => onSettingChange('sourceCity', e.target.value)}
-        >
-          {availableCities.map(city => (
-            <option key={city} value={city}>{city}</option>
-          ))}
-        </select>
+    <section className="rounded-[28px] border border-black/5 bg-white/90 p-4 shadow-[0_10px_34px_rgba(15,23,42,0.05)] md:p-6">
+      <div className="mb-5">
+        <div className="text-xs font-medium uppercase tracking-[0.18em] text-slate-400">Offer 基础信息</div>
+        <h2 className="mt-1 text-xl font-semibold text-slate-950">{title}</h2>
+        <p className="mt-1 text-sm text-slate-500">
+          年终奖会自动平均到每个月；系统会同时展示在岗时薪和含通勤真实时薪。
+        </p>
       </div>
 
-      <div className="flex flex-col">
-        <label htmlFor="salary" className="text-xs md:text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">税前年收入（元）</label>
-        <input 
-          type="number" 
-          id="salary" 
-          placeholder="请输入年收入" 
-          min="0" 
-          step="1000" 
-          className="border border-gray-300 dark:border-gray-600 rounded-md py-1 md:py-2 px-2 md:px-3 text-xs md:text-sm bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-          value={salaryInput} 
-          onChange={handleSalaryChange}
-        />
-      </div>
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <div className="flex flex-col">
+          <label htmlFor={`${title}-city`} className={labelClass}>所在城市</label>
+          <select
+            id={`${title}-city`}
+            className={fieldClass}
+            value={settings.sourceCity}
+            onChange={(e) => onSettingChange('sourceCity', e.target.value)}
+          >
+            {availableCities.map((city) => <option key={city} value={city}>{city}</option>)}
+          </select>
+        </div>
 
-      <div className="flex flex-col">
-        <label htmlFor="housingFundRate" className="text-xs md:text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">公积金比例（%）</label>
-        <input
-          type="number"
-          id="housingFundRate"
-          placeholder="公积金比例"
-          min="5"
-          max="12"
-          step="0.1"
-          className="border border-gray-300 dark:border-gray-600 rounded-md py-1 md:py-2 px-2 md:px-3 text-xs md:text-sm bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-          value={housingFundInput}
-          onChange={handleHousingFundChange}
-        />
-        <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-          允许范围: 5% - 12%
+        <div className="flex flex-col">
+          <label htmlFor={`${title}-salary`} className={labelClass}>税前固定年薪（元）</label>
+          <input
+            id={`${title}-salary`}
+            type="number"
+            min="0"
+            step="1000"
+            value={salaryInput}
+            onChange={(e) => {
+              const value = e.target.value;
+              setSalaryInput(value);
+              onSettingChange('salary', value === '' ? 0 : Number(value));
+            }}
+            className={fieldClass}
+          />
+        </div>
+
+        <div className="flex flex-col">
+          <label htmlFor={`${title}-annualBonus`} className={labelClass}>年终奖 / 额外现金（元）</label>
+          <input
+            id={`${title}-annualBonus`}
+            type="number"
+            min="0"
+            step="1000"
+            value={bonusInput}
+            onChange={(e) => {
+              const value = e.target.value;
+              setBonusInput(value);
+              onSettingChange('annualBonus', value === '' ? 0 : Number(value));
+            }}
+            className={fieldClass}
+          />
+        </div>
+
+        <div className="flex flex-col">
+          <label htmlFor={`${title}-housingFundRate`} className={labelClass}>公积金比例（%）</label>
+          <input
+            id={`${title}-housingFundRate`}
+            type="number"
+            min="5"
+            max="12"
+            step="0.1"
+            value={housingFundInput}
+            onChange={(e) => {
+              const value = e.target.value;
+              setHousingFundInput(value);
+              if (value !== '') {
+                const percent = Number(value);
+                if (percent >= 5 && percent <= 12) {
+                  onSettingChange('housingFundRate', (percent / 100).toString());
+                }
+              }
+            }}
+            className={fieldClass}
+          />
+        </div>
+
+        <div className="flex flex-col">
+          <label htmlFor={`${title}-workStartTime`} className={labelClass}>每天到岗时间</label>
+          <input
+            id={`${title}-workStartTime`}
+            type="time"
+            value={settings.workStartTime}
+            onChange={(e) => onSettingChange('workStartTime', e.target.value)}
+            className={fieldClass}
+          />
+        </div>
+
+        <div className="flex flex-col">
+          <label htmlFor={`${title}-workEndTime`} className={labelClass}>每天下班时间</label>
+          <input
+            id={`${title}-workEndTime`}
+            type="time"
+            value={settings.workEndTime}
+            onChange={(e) => onSettingChange('workEndTime', e.target.value)}
+            className={fieldClass}
+          />
+        </div>
+
+        <div className="flex flex-col">
+          <label htmlFor={`${title}-workDaysPerMonth`} className={labelClass}>每月工作天数</label>
+          <input
+            id={`${title}-workDaysPerMonth`}
+            type="number"
+            min="1"
+            max="31"
+            step="0.5"
+            value={settings.workDaysPerMonth}
+            onChange={(e) => onSettingChange('workDaysPerMonth', e.target.value === '' ? 22 : Number(e.target.value))}
+            className={fieldClass}
+          />
+        </div>
+
+        <div className="flex flex-col">
+          <label htmlFor={`${title}-commuteMinutesPerDay`} className={labelClass}>通勤时长 / 天（分钟）</label>
+          <input
+            id={`${title}-commuteMinutesPerDay`}
+            type="number"
+            min="0"
+            step="5"
+            value={settings.commuteMinutesPerDay}
+            onChange={(e) => onSettingChange('commuteMinutesPerDay', e.target.value === '' ? 0 : Number(e.target.value))}
+            className={fieldClass}
+          />
         </div>
       </div>
-    </div>
+    </section>
   );
 };
 
-export default MainInputs; 
+export default MainInputs;

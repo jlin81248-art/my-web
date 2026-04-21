@@ -5,8 +5,8 @@ import { Inter } from 'next/font/google';
 const inter = Inter({ subsets: ['latin'] });
 
 export const metadata: Metadata = {
-  title: '在别的城市要过上现在的生活，我tm到底要赚多少钱？',
-  description: '城市生活成本与薪资水平计算器，快速估算不同城市之间的薪资差异',
+  title: 'OfferWise｜基于城市生活成本的真实购买力决策平台',
+  description: '输入 offer 年包、工作时长和生活方式偏好，评估不同城市下的真实购买力、可支配收入和真实时薪。',
   manifest: '/manifest.json',
   icons: {
     icon: '/favicon.ico',
@@ -27,16 +27,16 @@ export default function RootLayout({
   return (
     <html lang="zh-CN" className="dark:bg-gray-900">
       <head>
-        <script dangerouslySetInnerHTML={{ __html: `
-          // 检测系统暗色模式并应用
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `
           (function() {
             if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
               document.documentElement.classList.add('dark');
             } else {
               document.documentElement.classList.remove('dark');
             }
-            
-            // 监听系统主题变化
+
             window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', e => {
               if (e.matches) {
                 document.documentElement.classList.add('dark');
@@ -45,10 +45,14 @@ export default function RootLayout({
               }
             });
           })();
-        ` }} />
+        `,
+          }}
+        />
         <link rel="manifest" href="/manifest.json" />
       </head>
-      <body className={`${inter.className} dark:bg-gray-900 dark:text-gray-200`}>{children}</body>
+      <body className={`${inter.className} dark:bg-gray-900 dark:text-gray-200`}>
+        {children}
+      </body>
     </html>
   );
 }
