@@ -16,7 +16,6 @@ import ScenarioSimulator from '../components/ScenarioSimulator';
 import ThresholdAnalysis from '../components/ThresholdAnalysis';
 import RiskWarnings from '../components/RiskWarnings';
 import FinalDecision from '../components/FinalDecision';
-import ScoreCalibrationPanel from '../components/ScoreCalibrationPanel';
 import CityDataLoader from '../utils/CityDataLoader';
 import CostCalculator, {
   OfferComparisonResult,
@@ -333,14 +332,13 @@ export default function Home() {
               <SectionIntro
                 eyebrow="Step 4 · decision"
                 title="从分析进入策略：什么条件下值得跳"
-                description="这一层开始做推演：调参数、看阈值、看风险、看评分拆解，最后再落到最终结论。"
+                description="这一层开始做推演：调参数、看阈值、看风险，最后再落到最终结论。"
               />
 
               <div className="mt-6 space-y-6">
                 <ScenarioSimulator scenario={scenario} onChange={setScenario} comparison={simulatedComparison} />
                 <ThresholdAnalysis comparison={comparison} />
                 <RiskWarnings warnings={comparison.riskWarnings} />
-                <ScoreCalibrationPanel comparison={comparison} />
                 <FinalDecision comparison={comparison} />
               </div>
             </SectionShell>

@@ -7,15 +7,13 @@ interface FinalDecisionProps {
 
 const FinalDecision: React.FC<FinalDecisionProps> = ({ comparison }) => {
   const badgeClass =
-    comparison.weightedScore >= 75
+    comparison.weightedScore >= 72
       ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-      : comparison.weightedScore >= 60
+      : comparison.weightedScore >= 58
         ? 'bg-slate-100 text-slate-800 border-slate-200'
         : comparison.weightedScore >= 45
           ? 'bg-amber-50 text-amber-700 border-amber-200'
           : 'bg-rose-50 text-rose-700 border-rose-200';
-
-  const debug = comparison.scoreDebug;
 
   return (
     <section className="overflow-hidden rounded-[32px] border border-black/5 bg-[linear-gradient(135deg,#111111,#2B2B2B)] text-white shadow-[0_24px_70px_rgba(15,23,42,0.18)]">
@@ -53,9 +51,7 @@ const FinalDecision: React.FC<FinalDecisionProps> = ({ comparison }) => {
 
           <div className="mt-5 space-y-3">
             <SideMetric label="主结论" value={comparison.decisionLabel} />
-            <SideMetric label="核心归一化分" value={`${debug?.normalizedCoreScore ?? '—'}`} />
-            <SideMetric label="TOP3 主观体验" value={`${comparison.topPrioritySubjectiveAfter.toFixed(1)} / 5`} />
-            <SideMetric label="风险扣分" value={debug ? `-${debug.riskPenalty.toFixed(1)}` : '—'} />
+            <SideMetric label="摘要标题" value={comparison.summaryTitle} />
           </div>
         </div>
       </div>
@@ -65,9 +61,9 @@ const FinalDecision: React.FC<FinalDecisionProps> = ({ comparison }) => {
 
 function SideMetric({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex items-center justify-between rounded-[20px] border border-white/10 bg-white/[0.05] px-4 py-3">
-      <span className="text-sm text-white/55">{label}</span>
-      <span className="text-sm font-semibold text-white">{value}</span>
+    <div className="rounded-[22px] border border-white/10 bg-white/5 px-4 py-4">
+      <div className="text-[11px] uppercase tracking-[0.16em] text-white/45">{label}</div>
+      <div className="mt-1 text-base font-semibold text-white">{value}</div>
     </div>
   );
 }

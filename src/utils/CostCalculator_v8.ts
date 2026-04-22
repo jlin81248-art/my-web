@@ -106,7 +106,7 @@ export interface DeltaBreakdownItem {
   key: string;
   label: string;
   amount: number;
-  explanation?: string;
+  explanation: string;
 }
 
 export interface RiskWarning {
@@ -120,24 +120,6 @@ export interface ThresholdHint {
   label: string;
   value: string;
   explanation: string;
-}
-
-export interface ScoreDebugItem {
-  key: PreferenceKey;
-  label: string;
-  score: number;
-  weight: number;
-  contribution: number;
-}
-
-export interface ScoreDebug {
-  rawWeightedDelta: number;
-  normalizedCoreScore: number;
-  topPriorityAdjustment: number;
-  subjectiveAdjustment: number;
-  riskPenalty: number;
-  finalScore: number;
-  dimensionBreakdown: ScoreDebugItem[];
 }
 
 export interface OfferComparisonResult {
@@ -161,20 +143,7 @@ export interface OfferComparisonResult {
   deltaBreakdown: DeltaBreakdownItem[];
   riskWarnings: RiskWarning[];
   thresholdHints: ThresholdHint[];
-  dimensionScores: Record<PreferenceKey, number>;
-  scoreDebug: ScoreDebug;
 }
-
-const PREFERENCE_LABELS: Record<PreferenceKey, string> = {
-  salary: '薪资与存钱',
-  health: '身心健康与工作强度',
-  entertainment: '娱乐与生活丰富度',
-  housing: '居住条件',
-  time: '通勤与自由时间',
-  family: '家庭负担',
-  climate: '气候与城市环境',
-  growth: '职业成长',
-};
 
 class CostCalculator {
   private cityDataLoader: CityDataLoader;
@@ -275,28 +244,9 @@ class CostCalculator {
     };
 
     const weightedDelta = weights.reduce((sum, item) => sum + (dimensionScores[item.key] * item.weight), 0);
-    const normalizedCoreScore = 50 + 34 * Math.tanh(weightedDelta / 32);
+    const weightedScore = Math.round(this.clamp(50 + weightedDelta / 2.2, 0, 100));
 
-    const topPriorityKeys = preferenceOrder.slice(0, 3);
-    const topPriorityMean = topPriorityKeys.length > 0
-      ? topPriorityKeys.reduce((sum, key) => sum + dimensionScores[key], 0) / topPriorityKeys.length
-      : 0;
-    const topPriorityAdjustment = topPriorityMean * 0.08;
-
-    const subjectiveDelta = after.topPrioritySubjectiveScore - before.topPrioritySubjectiveScore;
-    const subjectiveAdjustment = subjectiveDelta * 5;
-
-    const riskPenalty = this.calculateRiskPenalty(after);
-
-    const weightedScore = Math.round(
-      this.clamp(
-        normalizedCoreScore + topPriorityAdjustment + subjectiveAdjustment - riskPenalty,
-        0,
-        100,
-      ),
-    );
-
-    const painPointRows = this.buildPainPointRows(before, after, preferenceOrder, dimensionScores);
+    const painPointRows = this.buildPainPointRows(before, after, preferenceOrder);
     const topPriorityFindings = painPointRows.slice(0, 3);
 
     const { decisionLabel, summaryTitle, summaryText } = this.generateNarrative(
@@ -305,24 +255,6 @@ class CostCalculator {
       before,
       after,
     );
-
-    const scoreDebug: ScoreDebug = {
-      rawWeightedDelta: Number(weightedDelta.toFixed(1)),
-      normalizedCoreScore: Number(normalizedCoreScore.toFixed(1)),
-      topPriorityAdjustment: Number(topPriorityAdjustment.toFixed(1)),
-      subjectiveAdjustment: Number(subjectiveAdjustment.toFixed(1)),
-      riskPenalty: Number(riskPenalty.toFixed(1)),
-      finalScore: weightedScore,
-      dimensionBreakdown: weights
-        .map((item) => ({
-          key: item.key,
-          label: PREFERENCE_LABELS[item.key],
-          score: Number(dimensionScores[item.key].toFixed(1)),
-          weight: item.weight,
-          contribution: Number((dimensionScores[item.key] * item.weight).toFixed(1)),
-        }))
-        .sort((a, b) => weights.findIndex((w) => w.key === a.key) - weights.findIndex((w) => w.key === b.key)),
-    };
 
     return {
       before,
@@ -345,13 +277,11 @@ class CostCalculator {
       deltaBreakdown: this.calculateDeltaBreakdown(before, after),
       riskWarnings: this.generateRiskWarnings(after),
       thresholdHints: this.solveThresholdConditions(before, after),
-      dimensionScores,
-      scoreDebug,
     };
   }
 
   getPreferenceWeights(order: PreferenceKey[]): PreferenceWeight[] {
-    const distribution = [0.28, 0.22, 0.17, 0.11, 0.09, 0.06, 0.04, 0.03];
+    const distribution = [0.26, 0.20, 0.16, 0.12, 0.10, 0.07, 0.05, 0.04];
     return order.map((key, index) => ({
       key,
       weight: distribution[index] ?? 0,
@@ -361,17 +291,15 @@ class CostCalculator {
   calculateMonthlyIncome(annualPackage: number, cityData: CityData, settings: Settings): MonthlyIncome {
     const monthlyGross = annualPackage / 12;
     const insuranceBase = Math.min(
-      Math.max(monthlyGross, Number(cityData.social_security_base_min) || monthlyGross),
-      Number(cityData.social_security_base_max) || monthlyGross,
+      Math.max(monthlyGross, cityData.social_security_base_min),
+      cityData.social_security_base_max,
     );
-
-    const housingFundRate = Number.parseFloat(settings.housingFundRate || '0.08') || 0.08;
 
     const monthlyInsurance =
       insuranceBase * 0.08 +
       insuranceBase * 0.02 +
       insuranceBase * 0.005 +
-      insuranceBase * housingFundRate;
+      insuranceBase * parseFloat(settings.housingFundRate);
 
     const taxable = monthlyGross - monthlyInsurance - 5000;
     const tax = this.calculateTax(Math.max(0, taxable));
@@ -407,85 +335,8 @@ class CostCalculator {
     };
   }
 
-  private calculateHousingCost(cityData: CityData, settings: Settings): number {
-    if (settings.customRentMonthly > 0) {
-      return settings.customRentMonthly;
-    }
-
-    const isCenter = settings.housingLocation === 'center';
-    const isLarge = settings.housingSize === 'large';
-    const isShared = settings.housingSize === 'shared';
-
-    if (settings.housingType === 'buy') {
-      const unitPrice = isCenter
-        ? Number(cityData.house_price_center) || 0
-        : Number(cityData.house_price_suburb) || 0;
-      const area = isLarge ? 110 : 70;
-      const principal = unitPrice * area * 0.3;
-      const years = Math.max(1, settings.loanTerm || 30);
-      const monthlyRate = Math.max(0.0001, (settings.loanInterestRate || 0.0588) / 12);
-      const months = years * 12;
-      const mortgage = principal * monthlyRate * Math.pow(1 + monthlyRate, months) / (Math.pow(1 + monthlyRate, months) - 1);
-      return Number.isFinite(mortgage) ? mortgage : 0;
-    }
-
-    const oneBed = isCenter
-      ? Number(cityData.rent_center_1b) || 0
-      : Number(cityData.rent_suburb_1b) || 0;
-    const threeBed = isCenter
-      ? Number(cityData.rent_center_3b) || 0
-      : Number(cityData.rent_suburb_3b) || 0;
-
-    if (isShared) return oneBed * 0.6;
-    return isLarge ? threeBed : oneBed;
-  }
-
-  private calculateDiningCost(cityData: CityData, settings: Settings): number {
-    const homeRatio = this.clamp(settings.diningHomeRatio || 70, 0, 100) / 100;
-    const home = Number(cityData.dining_home) || 0;
-    const out = Number(cityData.dining_out) || 0;
-    const mealsBase = home * homeRatio + out * (1 - homeRatio);
-    return settings.companyMeals ? mealsBase * 0.75 : mealsBase;
-  }
-
-  private calculateTransportCost(cityData: CityData, settings: Settings): number {
-    if (settings.transportType === 'car') {
-      return (Number(cityData.transport_car) || 0) + Math.max(0, settings.carLoanMonthlyPayment || 0);
-    }
-    return Number(cityData.transport_public) || 0;
-  }
-
-  private calculateUtilitiesAndEntertainmentCost(cityData: CityData, settings: Settings): { utilities: number; entertainment: number } {
-    const utilities =
-      (Number(cityData.utilities) || 0) +
-      (Number(cityData.mobile_plan) || 0) +
-      (Number(cityData.internet) || 0);
-
-    const entertainmentBase =
-      (Number(cityData.fitness) || 0) +
-      (Number(cityData.cinema) || 0) * 2;
-
-    const multiplierMap: Record<string, number> = {
-      poor: 0.5,
-      low: 0.75,
-      medium: 1,
-      high: 1.35,
-    };
-
-    return {
-      utilities,
-      entertainment: entertainmentBase * (multiplierMap[settings.entertainmentLevel] ?? 1),
-    };
-  }
-
-  private buildPainPointRows(
-    before: OfferMetrics,
-    after: OfferMetrics,
-    preferenceOrder: PreferenceKey[],
-    dimensionScores: Record<PreferenceKey, number>,
-  ): PainPointRow[] {
+  private buildPainPointRows(before: OfferMetrics, after: OfferMetrics, preferenceOrder: PreferenceKey[]): PainPointRow[] {
     const rankMap = new Map(preferenceOrder.map((key, index) => [key, index + 1]));
-
     const rows: PainPointRow[] = [
       {
         key: 'salary',
@@ -493,10 +344,10 @@ class CostCalculator {
         beforeValue: `${this.formatCurrency(before.monthlyDisposable)}/月可支配｜在岗 ${this.formatCurrency(before.workOnlyHourlyPay)}/h`,
         afterValue: `${this.formatCurrency(after.monthlyDisposable)}/月可支配｜在岗 ${this.formatCurrency(after.workOnlyHourlyPay)}/h`,
         deltaText: `${this.getSignedCurrency(after.monthlyDisposable - before.monthlyDisposable)} / 月；主观满意 ${this.getSignedNumber(after.subjectiveScores.salary - before.subjectiveScores.salary)}`,
-        impact: this.getImpact(dimensionScores.salary),
+        impact: this.getImpact(this.getSalaryDimensionScore(before, after)),
         explanation: after.monthlyDisposable >= before.monthlyDisposable
-          ? '涨薪不只是名义数字上涨，也更有效地转化成了结余和时薪。'
-          : '名义总包提升未必带来更高结余，实际购买力和时薪体感可能被摊薄。',
+          ? '涨薪不只是数字更高，也更有效地转化成了月结余和时薪。'
+          : '看起来像涨薪，但没有真正换来更高的月可支配收入或更好的时薪体感。',
         priorityRank: rankMap.get('salary') || 99,
       },
       {
@@ -505,10 +356,10 @@ class CostCalculator {
         beforeValue: `健康压力 ${before.healthPressureScore}/100｜主观友好度 ${before.subjectiveScores.health}/5`,
         afterValue: `健康压力 ${after.healthPressureScore}/100｜主观友好度 ${after.subjectiveScores.health}/5`,
         deltaText: `健康压力 ${this.getSignedNumber(before.healthPressureScore - after.healthPressureScore)}；主观友好度 ${this.getSignedNumber(after.subjectiveScores.health - before.subjectiveScores.health)}`,
-        impact: this.getImpact(dimensionScores.health),
+        impact: this.getImpact(this.getHealthDimensionScore(before, after)),
         explanation: after.healthPressureScore <= before.healthPressureScore
-          ? '工时、工作天数、通勤与主观体感更可持续，长期透支风险更低。'
-          : '如果工时和通勤继续上升，健康维度会快速抵消薪资提升带来的收益。',
+          ? '跳槽后工时、月工作天数、通勤或主观强度感受更可持续，对身心更友好。'
+          : '跳槽后工作强度更容易透支身体或情绪，这个成本不能只靠总包掩盖。',
         priorityRank: rankMap.get('health') || 99,
       },
       {
@@ -517,7 +368,7 @@ class CostCalculator {
         beforeValue: `娱乐预算占比 ${before.entertainmentBudgetRatio}%｜主观评分 ${before.subjectiveScores.entertainment}/5｜自由时间 ${before.freeHoursPerDay}h`,
         afterValue: `娱乐预算占比 ${after.entertainmentBudgetRatio}%｜主观评分 ${after.subjectiveScores.entertainment}/5｜自由时间 ${after.freeHoursPerDay}h`,
         deltaText: `预算占比 ${this.getSignedPercent(after.entertainmentBudgetRatio - before.entertainmentBudgetRatio)}；主观评分 ${this.getSignedNumber(after.subjectiveScores.entertainment - before.subjectiveScores.entertainment)}；自由时间 ${this.getSignedNumber(after.freeHoursPerDay - before.freeHoursPerDay)}h`,
-        impact: this.getImpact(dimensionScores.entertainment),
+        impact: this.getImpact(this.getEntertainmentDimensionScore(before, after)),
         explanation: this.getEntertainmentExplanation(before, after),
         priorityRank: rankMap.get('entertainment') || 99,
       },
@@ -527,10 +378,10 @@ class CostCalculator {
         beforeValue: `住房负担率 ${before.housingBurdenRate}%｜主观评分 ${before.subjectiveScores.housing}/5`,
         afterValue: `住房负担率 ${after.housingBurdenRate}%｜主观评分 ${after.subjectiveScores.housing}/5`,
         deltaText: `住房负担 ${this.getSignedPercent(after.housingBurdenRate - before.housingBurdenRate)}；主观评分 ${this.getSignedNumber(after.subjectiveScores.housing - before.subjectiveScores.housing)}`,
-        impact: this.getImpact(dimensionScores.housing),
+        impact: this.getImpact(this.getHousingDimensionScore(before, after)),
         explanation: after.housingBurdenRate <= before.housingBurdenRate
-          ? '住房占税后收入比例更低，说明住得起且住得舒服的概率更高。'
-          : '住房压力一旦抬升，娱乐、储蓄和抗风险空间都会被一起挤压。',
+          ? '住房占税后收入的比例更低，住得起且住得更舒服的概率更高。'
+          : '住房压力上升后，其他生活质量很容易一起被挤压。',
         priorityRank: rankMap.get('housing') || 99,
       },
       {
@@ -539,10 +390,10 @@ class CostCalculator {
         beforeValue: `月工作 ${before.workingDaysPerMonth} 天｜通勤 ${before.commuteMinutesPerDay} 分钟｜主观评分 ${before.subjectiveScores.time}/5`,
         afterValue: `月工作 ${after.workingDaysPerMonth} 天｜通勤 ${after.commuteMinutesPerDay} 分钟｜主观评分 ${after.subjectiveScores.time}/5`,
         deltaText: `月工作 ${this.getSignedNumber(after.workingDaysPerMonth - before.workingDaysPerMonth)} 天；通勤 ${this.getSignedNumber(after.commuteMinutesPerDay - before.commuteMinutesPerDay)} 分钟；主观评分 ${this.getSignedNumber(after.subjectiveScores.time - before.subjectiveScores.time)}`,
-        impact: this.getImpact(dimensionScores.time),
+        impact: this.getImpact(this.getTimeDimensionScore(before, after)),
         explanation: after.freeHoursPerDay >= before.freeHoursPerDay && after.commuteMinutesPerDay <= before.commuteMinutesPerDay
-          ? '被工作和通勤吃掉的时间更少，真正能归自己支配的时间更多。'
-          : '时间成本经常被忽略，但它会持续侵蚀恢复、社交和生活满足感。',
+          ? '跳槽后被工作和通勤吃掉的时间更少，真正能归自己支配的时间更多。'
+          : '如果月工作天数更高、通勤更长，自由时间会缩水得很明显。',
         priorityRank: rankMap.get('time') || 99,
       },
       {
@@ -551,10 +402,10 @@ class CostCalculator {
         beforeValue: `家庭负担率 ${before.familyBurdenRate}%｜主观评分 ${before.subjectiveScores.family}/5`,
         afterValue: `家庭负担率 ${after.familyBurdenRate}%｜主观评分 ${after.subjectiveScores.family}/5`,
         deltaText: `负担率 ${this.getSignedPercent(after.familyBurdenRate - before.familyBurdenRate)}；主观评分 ${this.getSignedNumber(after.subjectiveScores.family - before.subjectiveScores.family)}`,
-        impact: this.getImpact(dimensionScores.family),
+        impact: this.getImpact(this.getFamilyDimensionScore(before, after)),
         explanation: after.familyBurdenRate <= before.familyBurdenRate
-          ? '家庭支出对收入的挤压更小，现金流更稳。'
-          : '家庭支出占比上升后，跳槽的抗风险能力会明显下降。',
+          ? '教育、赡养、医疗对收入的挤压更小，家庭现金流更稳。'
+          : '家庭支出占比上升后，跳槽的抗风险能力会下降。',
         priorityRank: rankMap.get('family') || 99,
       },
       {
@@ -563,10 +414,10 @@ class CostCalculator {
         beforeValue: `主观评分 ${before.subjectiveScores.climate}/5`,
         afterValue: `主观评分 ${after.subjectiveScores.climate}/5`,
         deltaText: `主观评分 ${this.getSignedNumber(after.subjectiveScores.climate - before.subjectiveScores.climate)}`,
-        impact: this.getImpact(dimensionScores.climate),
+        impact: this.getImpact(this.getClimateDimensionScore(before, after)),
         explanation: after.subjectiveScores.climate >= before.subjectiveScores.climate
-          ? '目标城市在宜居体感上更贴近你的偏好。'
-          : '气候与环境是慢变量，短期容易忽略，长期却很影响留任体验。',
+          ? '从你的主观感受看，跳槽后所在城市更适合长期生活。'
+          : '即使收入好看，城市体感下降也会拉低长期幸福感。',
         priorityRank: rankMap.get('climate') || 99,
       },
       {
@@ -575,10 +426,10 @@ class CostCalculator {
         beforeValue: `主观评分 ${before.subjectiveScores.growth}/5`,
         afterValue: `主观评分 ${after.subjectiveScores.growth}/5`,
         deltaText: `主观评分 ${this.getSignedNumber(after.subjectiveScores.growth - before.subjectiveScores.growth)}`,
-        impact: this.getImpact(dimensionScores.growth),
+        impact: this.getImpact(this.getGrowthDimensionScore(before, after)),
         explanation: after.subjectiveScores.growth >= before.subjectiveScores.growth
-          ? '平台、机会与长期成长空间更强，更适合接受短期波动换长期收益。'
-          : '短期更稳不等于长期更优，成长性下降会影响跳槽的长期回报。',
+          ? '如果你接受短期波动换长期成长，这份新 offer 的潜力更高。'
+          : '这次跳槽更像短期变化，未必带来更好的长期成长回报。',
         priorityRank: rankMap.get('growth') || 99,
       },
     ];
@@ -586,147 +437,52 @@ class CostCalculator {
     return rows.sort((a, b) => a.priorityRank - b.priorityRank);
   }
 
-  private getSalaryDimensionScore(before: OfferMetrics, after: OfferMetrics): number {
-    const disposableDelta = after.monthlyDisposable - before.monthlyDisposable;
-    const workOnlyDelta = after.workOnlyHourlyPay - before.workOnlyHourlyPay;
-    const realDelta = after.realHourlyPay - before.realHourlyPay;
-    const subjectiveDelta = (after.subjectiveScores.salary - before.subjectiveScores.salary) * 10;
-    return this.clamp((disposableDelta / 1000) * 10 + workOnlyDelta * 2 + realDelta * 1.5 + subjectiveDelta, -100, 100);
-  }
-
-  private getEntertainmentDimensionScore(before: OfferMetrics, after: OfferMetrics): number {
-    const sceneDelta = (after.subjectiveScores.entertainment - before.subjectiveScores.entertainment) * 15;
-    const freeTimeDelta = (after.freeHoursPerDay - before.freeHoursPerDay) * 10;
-    const budgetPressureDelta = (before.entertainmentBudgetRatio - after.entertainmentBudgetRatio) * 2;
-    return this.clamp(sceneDelta + freeTimeDelta + budgetPressureDelta, -100, 100);
-  }
-
-  private getHousingDimensionScore(before: OfferMetrics, after: OfferMetrics): number {
-    const burdenDelta = (before.housingBurdenRate - after.housingBurdenRate) * 4;
-    const subjectiveDelta = (after.subjectiveScores.housing - before.subjectiveScores.housing) * 12;
-    return this.clamp(burdenDelta + subjectiveDelta, -100, 100);
-  }
-
-  private getTimeDimensionScore(before: OfferMetrics, after: OfferMetrics): number {
-    const freeTimeDelta = (after.freeHoursPerDay - before.freeHoursPerDay) * 16;
-    const commuteDelta = (before.commuteMinutesPerDay - after.commuteMinutesPerDay) / 3;
-    const monthlyDaysDelta = (before.workingDaysPerMonth - after.workingDaysPerMonth) * 3;
-    const subjectiveDelta = (after.subjectiveScores.time - before.subjectiveScores.time) * 10;
-    return this.clamp(freeTimeDelta + commuteDelta + monthlyDaysDelta + subjectiveDelta, -100, 100);
-  }
-
-  private getFamilyDimensionScore(before: OfferMetrics, after: OfferMetrics): number {
-    const burdenDelta = (before.familyBurdenRate - after.familyBurdenRate) * 4;
-    const subjectiveDelta = (after.subjectiveScores.family - before.subjectiveScores.family) * 12;
-    return this.clamp(burdenDelta + subjectiveDelta, -100, 100);
-  }
-
-  private getHealthDimensionScore(before: OfferMetrics, after: OfferMetrics): number {
-    const pressureImprovement = (before.healthPressureScore - after.healthPressureScore) * 1.2;
-    const subjectiveDelta = (after.subjectiveScores.health - before.subjectiveScores.health) * 18;
-    const freeTimeDelta = (after.freeHoursPerDay - before.freeHoursPerDay) * 8;
-    const commuteDelta = (before.commuteMinutesPerDay - after.commuteMinutesPerDay) / 5;
-    return this.clamp(pressureImprovement + subjectiveDelta + freeTimeDelta + commuteDelta, -100, 100);
-  }
-
-  private getClimateDimensionScore(before: OfferMetrics, after: OfferMetrics): number {
-    return this.clamp((after.subjectiveScores.climate - before.subjectiveScores.climate) * 25, -100, 100);
-  }
-
-  private getGrowthDimensionScore(before: OfferMetrics, after: OfferMetrics): number {
-    return this.clamp((after.subjectiveScores.growth - before.subjectiveScores.growth) * 25, -100, 100);
-  }
-
-  private getEntertainmentExplanation(before: OfferMetrics, after: OfferMetrics): string {
-    const sceneDown = after.subjectiveScores.entertainment < before.subjectiveScores.entertainment;
-    const budgetUp = after.entertainmentBudgetRatio > before.entertainmentBudgetRatio;
-    const freeTimeDown = after.freeHoursPerDay < before.freeHoursPerDay;
-
-    if (sceneDown && (budgetUp || freeTimeDown)) {
-      return '跳槽后娱乐环境主观评分下降，同时娱乐预算压力或自由时间变差，娱乐体验大概率会下降。';
-    }
-    if (after.subjectiveScores.entertainment > before.subjectiveScores.entertainment && after.freeHoursPerDay >= before.freeHoursPerDay) {
-      return '跳槽后娱乐环境和下班后的可支配时间都更友好，更适合高娱乐偏好用户。';
-    }
-    if (budgetUp) {
-      return '想维持原有娱乐习惯会更吃力，娱乐消费更容易挤压现金流。';
-    }
-    return '娱乐相关变化不算极端，但仍建议结合你对城市生活丰富度的主观预期一起判断。';
-  }
-
-  private generateNarrative(
-    weightedScore: number,
-    topRows: PainPointRow[],
-    before: OfferMetrics,
-    after: OfferMetrics,
-  ): { decisionLabel: string; summaryTitle: string; summaryText: string } {
-    const lead = topRows[0];
-    const second = topRows[1];
-    const third = topRows[2];
-
-    if (weightedScore >= 75) {
-      return {
-        decisionLabel: '更适合跳',
-        summaryTitle: '这次跳槽明显更符合你的优先级',
-        summaryText: `你最在意的「${lead?.label ?? '核心维度'}」明显改善，而且「${second?.label ?? '第二优先维度'}」没有拖后腿。相比跳槽前，税后月收入 ${this.getSignedCurrency(after.monthlyIncome.税后工资 - before.monthlyIncome.税后工资)}，月可支配收入 ${this.getSignedCurrency(after.monthlyDisposable - before.monthlyDisposable)}。`,
-      };
-    }
-
-    if (weightedScore >= 60) {
-      return {
-        decisionLabel: '可以认真考虑',
-        summaryTitle: '这次跳槽总体可行，但不是无脑更优',
-        summaryText: `新 offer 在「${lead?.label ?? '核心维度'}」上更适合你，但「${third?.label ?? '另一个维度'}」仍有明显权衡。它更像是“有条件成立”的选择：只要把关键风险继续压一压，这次跳槽值得推进。`,
-      };
-    }
-
-    if (weightedScore >= 45) {
-      return {
-        decisionLabel: '需要谨慎选择',
-        summaryTitle: '这次跳槽并非不行，但关键代价还没被解决',
-        summaryText: `虽然「${lead?.label ?? '某个维度'}」有改善，但「${second?.label ?? '关键维度'}」和「${third?.label ?? '另一维度'}」的代价仍然较重。它更适合继续谈条件，而不是立刻拍板。`,
-      };
-    }
-
-    return {
-      decisionLabel: '目前不太建议跳',
-      summaryTitle: '这次跳槽的代价大于收益',
-      summaryText: `当前方案下，核心优先级没有获得足够改善，反而更容易在时间、健康或现金流上透支。除非能明显优化房租、通勤或薪酬结构，否则不建议仓促做决定。`,
-    };
-  }
-
   private calculateDeltaBreakdown(before: OfferMetrics, after: OfferMetrics): DeltaBreakdownItem[] {
+    const familyBefore = before.monthlyCosts.教育 + before.monthlyCosts.赡养 + before.monthlyCosts.医疗;
+    const familyAfter = after.monthlyCosts.教育 + after.monthlyCosts.赡养 + after.monthlyCosts.医疗;
+    const housingDelta = before.monthlyCosts.住房 - after.monthlyCosts.住房;
+    const entertainmentDelta = before.monthlyCosts.娱乐 - after.monthlyCosts.娱乐;
+    const familyDelta = familyBefore - familyAfter;
+    const timeDelta = Math.round((before.realHourlyPay - after.realHourlyPay) * 15);
+
     return [
       {
-        key: 'salary',
-        label: '税后月收入',
+        key: 'income',
+        label: '税后收入变化',
         amount: after.monthlyIncome.税后工资 - before.monthlyIncome.税后工资,
-        explanation: '名义涨薪是否真正落进税后现金流。',
+        explanation: '固定年薪、年终奖、公积金与税负变化共同影响税后月收入。',
       },
       {
         key: 'housing',
-        label: '住房成本',
-        amount: before.monthlyCosts.住房 - after.monthlyCosts.住房,
-        explanation: '房租/房贷经常是跳槽结果被吞掉的第一来源。',
+        label: '住房变化',
+        amount: housingDelta,
+        explanation: housingDelta >= 0
+          ? '跳槽后住房成本更低，现金流被释放出来。'
+          : '跳槽后租金或房贷更高，直接挤压了月结余。',
       },
       {
-        key: 'transport',
-        label: '交通成本',
-        amount: before.monthlyCosts.交通 - after.monthlyCosts.交通,
-        explanation: '交通不仅影响现金流，也影响时间和健康。',
+        key: 'time',
+        label: '通勤与时间成本',
+        amount: timeDelta,
+        explanation: timeDelta >= 0
+          ? '跳槽后真实时薪更高，说明相同时间换回了更多可支配价值。'
+          : '跳槽后工时或通勤更重，真实时薪被时间成本拉低。',
+      },
+      {
+        key: 'entertainment',
+        label: '娱乐支出变化',
+        amount: entertainmentDelta,
+        explanation: entertainmentDelta >= 0
+          ? '娱乐预算压力降低，更容易维持原有生活方式。'
+          : '跳槽后为了维持生活体验，需要付出更高娱乐成本。',
       },
       {
         key: 'family',
-        label: '家庭支出',
-        amount: (before.monthlyCosts.教育 + before.monthlyCosts.赡养 + before.monthlyCosts.医疗)
-          - (after.monthlyCosts.教育 + after.monthlyCosts.赡养 + after.monthlyCosts.医疗),
-        explanation: '家庭现金流压力是很多 offer 看起来更好、实际却更紧的原因。',
-      },
-      {
-        key: 'disposable',
-        label: '月可支配收入',
-        amount: after.monthlyDisposable - before.monthlyDisposable,
-        explanation: '最终落到“每月真正剩下多少钱”。',
+        label: '家庭支出变化',
+        amount: familyDelta,
+        explanation: familyDelta >= 0
+          ? '教育、赡养、医疗等支出占用更少，家庭现金流更稳。'
+          : '家庭相关支出上升，意味着跳槽后的现金流缓冲更薄。',
       },
     ];
   }
@@ -735,48 +491,48 @@ class CostCalculator {
     const warnings: RiskWarning[] = [];
 
     warnings.push(
+      after.healthPressureScore >= 70
+        ? {
+            level: '高',
+            title: '健康透支风险',
+            reason: '工时、月工作天数或通勤偏高，长期可能影响恢复和情绪。',
+            suggestion: '优先争取更短通勤、弹性办公，或重新评估是否值得为了总包接受当前强度。',
+          }
+        : after.healthPressureScore >= 50
+          ? {
+              level: '中',
+              title: '健康透支风险',
+              reason: '当前强度还能承受，但一旦业务节奏上升，透支风险会明显增加。',
+              suggestion: '继续用情景模拟测试通勤和工作天数的边界，尽量给自己留出恢复空间。',
+            }
+          : {
+              level: '低',
+              title: '健康透支风险',
+              reason: '当前时间与强度组合相对可持续。',
+              suggestion: '健康风险暂时不高，更值得把精力放在薪资、成长或住房条件上。',
+            },
+    );
+
+    warnings.push(
       after.housingBurdenRate >= 38
         ? {
             level: '高',
             title: '住房压力风险',
             reason: '住房成本占税后收入过高，其他生活质量会被持续挤压。',
-            suggestion: '优先谈住房补贴、base 薪资，或直接把租金预期往下压。',
+            suggestion: '优先压租金，或重新选择更低通勤/更低居住成本的方案，否则涨薪会被迅速吃掉。',
           }
         : after.housingBurdenRate >= 28
           ? {
               level: '中',
               title: '住房压力风险',
-              reason: '住房压力可接受，但不适合再叠加高娱乐或高家庭支出。',
-              suggestion: '保持当前方案可以，但不要同时接受更贵房租和更高通勤。',
+              reason: '住房压力可接受，但不太适合再叠加高娱乐或高家庭支出。',
+              suggestion: '如果住房不是你最优先的维度，可以接受；否则建议继续优化租金或房型。',
             }
           : {
               level: '低',
               title: '住房压力风险',
-              reason: '住房负担率相对健康。',
-              suggestion: '住房维度目前不是主要短板。',
-            },
-    );
-
-    warnings.push(
-      after.healthPressureScore >= 72
-        ? {
-            level: '高',
-            title: '健康透支风险',
-            reason: '工时、通勤和工作天数综合后的压力分偏高，长期透支概率大。',
-            suggestion: '继续确认团队作息、加班频次和弹性安排，不要只看 package。',
-          }
-        : after.healthPressureScore >= 58
-          ? {
-              level: '中',
-              title: '健康透支风险',
-              reason: '健康压力处于中高位，短期可接受，长期未必舒服。',
-              suggestion: '优先压缩通勤或月工作天数，比单纯再加一点奖金更有效。',
-            }
-          : {
-              level: '低',
-              title: '健康透支风险',
-              reason: '当前强度总体仍在可承受区间。',
-              suggestion: '健康维度没有明显红灯，可以把注意力放到现金流和成长性。',
+              reason: '住房负担相对健康。',
+              suggestion: '住房暂时不是阻碍，可以把更多判断权重放到健康、时间或成长上。',
             },
     );
 
@@ -799,7 +555,7 @@ class CostCalculator {
               level: '低',
               title: '家庭现金流风险',
               reason: '家庭支出对现金流的挤压较小。',
-              suggestion: '家庭维度目前没有明显短板。',
+              suggestion: '家庭支出压力较低，说明这份 offer 在家庭维度上没有明显短板。',
             },
     );
 
@@ -816,13 +572,13 @@ class CostCalculator {
               level: '中',
               title: '预期落差风险',
               reason: '核心优先级体验只能算一般，短期可能接受，长期未必喜欢。',
-              suggestion: '继续调房租、通勤或工作天数，看是否能把主观体验推到更舒服的区间。',
+              suggestion: '试着继续调房租、通勤或工作天数，看是否能把主观体验推到更舒服的区间。',
             }
           : {
               level: '低',
               title: '预期落差风险',
-              reason: '你最看重的几个维度主观体验整体不错，生活体感层面没有明显违和感。',
-              suggestion: '预期落差不大，可以更专注考虑长期成长价值。',
+              reason: '你最看重的几个维度主观体验整体不错，说明生活体感层面没有明显违和感。',
+              suggestion: '预期落差不大，可以更专注考虑是否具备长期成长价值。',
             },
     );
 
@@ -836,7 +592,13 @@ class CostCalculator {
       ? Math.max(0, Math.round((before.realHourlyPay - after.realHourlyPay) * 12))
       : 0;
     const workdayReductionNeeded = after.healthPressureScore > before.healthPressureScore
-      ? Math.max(0, Number((((after.healthPressureScore - before.healthPressureScore) / 8) * 0.5).toFixed(1)))
+      ? Math.max(0, Math.ceil((after.workingDaysPerMonth - before.workingDaysPerMonth) * 2) / 2)
+      : 0;
+    const bonusIncreaseNeeded = after.monthlyDisposable < before.monthlyDisposable
+      ? Math.max(12000, Math.round((before.monthlyDisposable - after.monthlyDisposable) * 12))
+      : 0;
+    const reimbursementIncreaseNeeded = after.monthlyCosts.医疗 > before.monthlyCosts.医疗
+      ? Math.min(100, Math.max(0, Math.ceil((after.monthlyCosts.医疗 - before.monthlyCosts.医疗) / 100) * 5))
       : 0;
 
     return [
@@ -851,18 +613,71 @@ class CostCalculator {
         explanation: '真实时薪很容易被通勤拉低，尤其对时间和健康敏感型用户影响更大。',
       },
       {
-        label: '工作天数阈值',
-        value: workdayReductionNeeded > 0 ? `建议每月再减少 ${workdayReductionNeeded} 天左右` : '当前工作天数已处于可接受区间',
-        explanation: '当健康压力是主要问题时，降工作天数通常比微调奖金更有效。',
+        label: '工作天数上限',
+        value: workdayReductionNeeded > 0 ? `建议每月减少约 ${workdayReductionNeeded} 天` : '当前工作天数基本可接受',
+        explanation: '如果健康压力主要来自月工作天数，这通常比“再涨一点薪”更关键。',
       },
       {
         label: '最低年终奖要求',
-        value: after.monthlyDisposable < before.monthlyDisposable
-          ? `建议年终奖至少再增加 ${Math.max(12000, Math.round((before.monthlyDisposable - after.monthlyDisposable) * 12))} 元`
-          : '当前年终奖水平已足够支撑',
+        value: bonusIncreaseNeeded > 0 ? `建议年终奖至少再增加 ${bonusIncreaseNeeded} 元` : '当前年终奖水平已足够支撑',
         explanation: '如果 base 难谈，年终奖往往是补回跳槽溢价的第二抓手。',
       },
+      {
+        label: '医疗报销比例',
+        value: reimbursementIncreaseNeeded > 0 ? `建议至少再提升约 ${reimbursementIncreaseNeeded}%` : '当前报销比例已基本可接受',
+        explanation: '如果家庭医疗支出是隐性负担，报销比例会直接影响真实现金流。',
+      },
     ];
+  }
+
+  private getSalaryDimensionScore(before: OfferMetrics, after: OfferMetrics): number {
+    const disposableDelta = after.monthlyDisposable - before.monthlyDisposable;
+    const workOnlyDelta = after.workOnlyHourlyPay - before.workOnlyHourlyPay;
+    const realDelta = after.realHourlyPay - before.realHourlyPay;
+    const subjectiveDelta = (after.subjectiveScores.salary - before.subjectiveScores.salary) * 10;
+    return this.clamp((disposableDelta / 1000) * 10 + workOnlyDelta * 2 + realDelta * 1.5 + subjectiveDelta, -100, 100);
+  }
+
+  private getHealthDimensionScore(before: OfferMetrics, after: OfferMetrics): number {
+    const healthPressureDelta = (before.healthPressureScore - after.healthPressureScore) * 1.2;
+    const subjectiveDelta = (after.subjectiveScores.health - before.subjectiveScores.health) * 14;
+    const freeTimeDelta = (after.freeHoursPerDay - before.freeHoursPerDay) * 8;
+    return this.clamp(healthPressureDelta + subjectiveDelta + freeTimeDelta, -100, 100);
+  }
+
+  private getEntertainmentDimensionScore(before: OfferMetrics, after: OfferMetrics): number {
+    const sceneDelta = (after.subjectiveScores.entertainment - before.subjectiveScores.entertainment) * 18;
+    const freeTimeDelta = (after.freeHoursPerDay - before.freeHoursPerDay) * 8;
+    const budgetPressureDelta = (before.entertainmentBudgetRatio - after.entertainmentBudgetRatio) * 1.6;
+    return this.clamp(sceneDelta + freeTimeDelta + budgetPressureDelta, -100, 100);
+  }
+
+  private getHousingDimensionScore(before: OfferMetrics, after: OfferMetrics): number {
+    const burdenDelta = (before.housingBurdenRate - after.housingBurdenRate) * 3.6;
+    const subjectiveDelta = (after.subjectiveScores.housing - before.subjectiveScores.housing) * 12;
+    return this.clamp(burdenDelta + subjectiveDelta, -100, 100);
+  }
+
+  private getTimeDimensionScore(before: OfferMetrics, after: OfferMetrics): number {
+    const freeTimeDelta = (after.freeHoursPerDay - before.freeHoursPerDay) * 14;
+    const commuteDelta = (before.commuteMinutesPerDay - after.commuteMinutesPerDay) / 3;
+    const monthlyDaysDelta = (before.workingDaysPerMonth - after.workingDaysPerMonth) * 3;
+    const subjectiveDelta = (after.subjectiveScores.time - before.subjectiveScores.time) * 12;
+    return this.clamp(freeTimeDelta + commuteDelta + monthlyDaysDelta + subjectiveDelta, -100, 100);
+  }
+
+  private getFamilyDimensionScore(before: OfferMetrics, after: OfferMetrics): number {
+    const burdenDelta = (before.familyBurdenRate - after.familyBurdenRate) * 4;
+    const subjectiveDelta = (after.subjectiveScores.family - before.subjectiveScores.family) * 10;
+    return this.clamp(burdenDelta + subjectiveDelta, -100, 100);
+  }
+
+  private getClimateDimensionScore(before: OfferMetrics, after: OfferMetrics): number {
+    return this.clamp((after.subjectiveScores.climate - before.subjectiveScores.climate) * 25, -100, 100);
+  }
+
+  private getGrowthDimensionScore(before: OfferMetrics, after: OfferMetrics): number {
+    return this.clamp((after.subjectiveScores.growth - before.subjectiveScores.growth) * 25, -100, 100);
   }
 
   private calculateHealthPressureScore(
@@ -871,63 +686,222 @@ class CostCalculator {
     commuteMinutesPerDay: number,
     healthFriendlyScore: number,
   ): number {
-    const workPenalty = Math.max(0, workHoursPerDay - 8) * 9;
-    const daysPenalty = Math.max(0, workingDaysPerMonth - 22) * 4;
-    const commutePenalty = Math.max(0, commuteMinutesPerDay - 30) * 0.22;
-    const subjectivePenalty = Math.max(0, 5 - healthFriendlyScore) * 10;
-    return Math.round(this.clamp(workPenalty + daysPenalty + commutePenalty + subjectivePenalty, 0, 100));
+    const workScore = this.clamp((workHoursPerDay - 8) * 8, 0, 40);
+    const dayScore = this.clamp((workingDaysPerMonth - 22) * 3.5, 0, 25);
+    const commuteScore = this.clamp((commuteMinutesPerDay - 40) / 3, 0, 15);
+    const subjectivePenalty = this.clamp((5 - healthFriendlyScore) * 6, 0, 20);
+    return Math.round(this.clamp(workScore + dayScore + commuteScore + subjectivePenalty, 0, 100));
   }
 
   private calculateTopPrioritySubjectiveScore(
-    subjectiveScores: Record<PreferenceKey, number>,
+    scores: Record<PreferenceKey, number>,
     topPriorityKeys: PreferenceKey[],
   ): number {
     if (topPriorityKeys.length === 0) return 0;
-    const total = topPriorityKeys.reduce((sum, key) => sum + (subjectiveScores[key] || 0), 0);
+    const total = topPriorityKeys.reduce((sum, key) => sum + (scores[key] || 0), 0);
     return Number((total / topPriorityKeys.length).toFixed(1));
   }
 
-  private calculateRiskPenalty(after: OfferMetrics): number {
-    let penalty = 0;
-    if (after.housingBurdenRate >= 38) penalty += 6;
-    else if (after.housingBurdenRate >= 28) penalty += 3;
+  private getEntertainmentExplanation(before: OfferMetrics, after: OfferMetrics): string {
+    const sceneDown = after.subjectiveScores.entertainment < before.subjectiveScores.entertainment;
+    const budgetUp = after.entertainmentBudgetRatio > before.entertainmentBudgetRatio;
+    const freeTimeDown = after.freeHoursPerDay < before.freeHoursPerDay;
 
-    if (after.familyBurdenRate >= 25) penalty += 5;
-    else if (after.familyBurdenRate >= 15) penalty += 2;
-
-    if (after.healthPressureScore >= 72) penalty += 6;
-    else if (after.healthPressureScore >= 58) penalty += 3;
-
-    if (after.topPrioritySubjectiveScore < 3) penalty += 5;
-    else if (after.topPrioritySubjectiveScore < 3.6) penalty += 2;
-
-    return penalty;
+    if (sceneDown && (budgetUp || freeTimeDown)) {
+      return '跳槽后娱乐环境主观评分下降，同时娱乐预算压力或自由时间变差，娱乐体验大概率会下降。';
+    }
+    if (after.subjectiveScores.entertainment > before.subjectiveScores.entertainment && after.freeHoursPerDay >= before.freeHoursPerDay) {
+      return '跳槽后娱乐环境和下班后的可支配时间都更友好，更适合高娱乐偏好用户。';
+    }
+    if (budgetUp) {
+      return '跳槽后想维持原有娱乐习惯会更吃力，娱乐消费更容易挤压现金流。';
+    }
+    return '娱乐相关变化不算极端，但仍建议结合你对城市生活丰富度的主观预期一起判断。';
   }
 
-  private calculateTax(taxableIncome: number): number {
-    if (taxableIncome <= 3000) return taxableIncome * 0.03;
-    if (taxableIncome <= 12000) return taxableIncome * 0.10 - 210;
-    if (taxableIncome <= 25000) return taxableIncome * 0.20 - 1410;
-    if (taxableIncome <= 35000) return taxableIncome * 0.25 - 2660;
-    if (taxableIncome <= 55000) return taxableIncome * 0.30 - 4410;
-    if (taxableIncome <= 80000) return taxableIncome * 0.35 - 7160;
-    return taxableIncome * 0.45 - 15160;
+  private generateNarrative(
+    weightedScore: number,
+    topRows: PainPointRow[],
+    before: OfferMetrics,
+    after: OfferMetrics,
+  ): { decisionLabel: string; summaryTitle: string; summaryText: string } {
+    const lead = topRows[0];
+    const second = topRows[1];
+
+    if (weightedScore >= 72) {
+      return {
+        decisionLabel: '更适合跳',
+        summaryTitle: '这次跳槽更符合你的优先级',
+        summaryText: `你最在意的「${lead?.label ?? '核心维度'}」明显改善，而且「${second?.label ?? '第二优先维度'}」没有拖后腿。相比跳槽前，税后月收入 ${this.getSignedCurrency(after.monthlyIncome.税后工资 - before.monthlyIncome.税后工资)}，月可支配收入 ${this.getSignedCurrency(after.monthlyDisposable - before.monthlyDisposable)}。`,
+      };
+    }
+
+    if (weightedScore >= 58) {
+      return {
+        decisionLabel: '可以认真考虑',
+        summaryTitle: '这次跳槽总体可行，但不是无脑更优',
+        summaryText: `新 offer 在「${lead?.label ?? '核心维度'}」上更适合你，但仍存在明显权衡。更像是“有条件成立”的选择：如果关键条件谈到位，这次跳槽值得推进。`,
+      };
+    }
+
+    if (weightedScore >= 45) {
+      return {
+        decisionLabel: '需要谨慎权衡',
+        summaryTitle: '名义变化不等于生活升级',
+        summaryText: `虽然部分指标可能上升，但你最看重的「${lead?.label ?? '核心维度'}」与「${second?.label ?? '关键维度'}」没有同步改善。尤其当你更在意生活体感而不是总包数字时，这次跳槽未必会让日常过得更舒服。`,
+      };
+    }
+
+    return {
+      decisionLabel: '不太建议仅凭涨薪跳',
+      summaryTitle: '这次跳槽很可能只是数字更好看',
+      summaryText: `对你来说，最关键的「${lead?.label ?? '核心维度'}」表现变差，而且「${second?.label ?? '关键维度'}」也没有补回来。特别是当跳槽后住房、健康或时间成本上升时，即使总包上涨，也可能换来更差的生活质量。`,
+    };
+  }
+
+  private calculateHousingCost(cityData: CityData, settings: Settings): number {
+    if (settings.housingType === 'rent') {
+      if ((settings.customRentMonthly || 0) > 0) {
+        return settings.customRentMonthly;
+      }
+
+      if (settings.housingLocation === 'center') {
+        if (settings.housingSize === 'shared') return cityData.rent_center_1b * 0.6;
+        if (settings.housingSize === 'small') return cityData.rent_center_1b;
+        return cityData.rent_center_3b;
+      }
+
+      if (settings.housingSize === 'shared') return cityData.rent_suburb_1b * 0.6;
+      if (settings.housingSize === 'small') return cityData.rent_suburb_1b;
+      return cityData.rent_suburb_3b;
+    }
+
+    const housePrice = settings.housingLocation === 'center'
+      ? cityData.house_price_center
+      : cityData.house_price_suburb;
+
+    const area = settings.housingSize === 'large' ? 120 : 60;
+    const totalPrice = housePrice * area;
+    const downPayment = totalPrice * 0.3;
+    const loan = totalPrice - downPayment;
+    const years = settings.loanTerm || 30;
+    const months = years * 12;
+    const useHousingFund = parseFloat(settings.housingFundRate) > 0.05;
+    const baseRate = settings.loanInterestRate || 0.0588;
+    const effectiveRate = useHousingFund ? baseRate * 0.7 + 0.0325 * 0.3 : baseRate;
+    const monthlyRate = effectiveRate / 12;
+    const monthlyPayment = loan * monthlyRate * Math.pow(1 + monthlyRate, months)
+      / (Math.pow(1 + monthlyRate, months) - 1);
+    const propertyFee = settings.housingSize === 'large' ? 360 : 180;
+
+    return monthlyPayment + propertyFee;
+  }
+
+  private calculateDiningCost(cityData: CityData, settings: Settings): number {
+    if (settings.companyMeals) {
+      const nonWorkdayRatio = 0.27;
+      const diningHomeRatio = (settings.diningHomeRatio || 0) / 100;
+      const diningOutRatio = 1 - diningHomeRatio;
+      const nonWorkdayCost = cityData.dining_home * diningHomeRatio + cityData.dining_out * diningOutRatio;
+      return nonWorkdayCost * nonWorkdayRatio;
+    }
+
+    const diningHomeRatio = (settings.diningHomeRatio || 0) / 100;
+    const diningOutRatio = 1 - diningHomeRatio;
+    return cityData.dining_home * diningHomeRatio + cityData.dining_out * diningOutRatio;
+  }
+
+  private calculateTransportCost(cityData: CityData, settings: Settings): number {
+    switch (settings.transportType) {
+      case 'public':
+        return cityData.transport_public;
+      case 'car':
+        return cityData.transport_car + (settings.carLoanMonthlyPayment || 0);
+      case 'ebike':
+        return 100;
+      case 'bike':
+      case 'walk':
+        return 0;
+      default:
+        return cityData.transport_public;
+    }
+  }
+
+  private calculateUtilitiesAndEntertainmentCost(cityData: CityData, settings: Settings): { utilities: number; entertainment: number } {
+    let entertainmentCost = 0;
+    switch (settings.entertainmentLevel) {
+      case 'poor':
+        entertainmentCost = 0;
+        break;
+      case 'low':
+        entertainmentCost = (cityData.fitness + cityData.cinema) * 2;
+        break;
+      case 'medium':
+        entertainmentCost = (cityData.fitness + cityData.cinema) * 4;
+        break;
+      case 'high':
+        entertainmentCost = (cityData.fitness + cityData.cinema) * 8;
+        break;
+      default:
+        entertainmentCost = (cityData.fitness + cityData.cinema) * 4;
+    }
+
+    return {
+      utilities: cityData.utilities + cityData.mobile_plan + cityData.internet,
+      entertainment: entertainmentCost,
+    };
   }
 
   private getDailyWorkHours(startTime: string, endTime: string): number {
-    const [startH, startM] = (startTime || '09:30').split(':').map(Number);
-    const [endH, endM] = (endTime || '18:30').split(':').map(Number);
-
-    const start = (startH || 0) * 60 + (startM || 0);
-    let end = (endH || 0) * 60 + (endM || 0);
-    if (end < start) end += 24 * 60;
-    return Math.max(0, (end - start) / 60);
+    const start = this.parseTimeToMinutes(startTime || '09:00');
+    const end = this.parseTimeToMinutes(endTime || '18:00');
+    if (Number.isNaN(start) || Number.isNaN(end)) return 8;
+    const rawMinutes = end >= start ? end - start : (24 * 60 - start + end);
+    return Math.max(0.5, rawMinutes / 60);
   }
 
-  private getImpact(score: number): 'positive' | 'negative' | 'neutral' {
-    if (score > 8) return 'positive';
-    if (score < -8) return 'negative';
+  private parseTimeToMinutes(time: string): number {
+    const [hour, minute] = time.split(':').map(Number);
+    if (Number.isNaN(hour) || Number.isNaN(minute)) return NaN;
+    return hour * 60 + minute;
+  }
+
+  private calculateTax(monthlyTaxable: number): number {
+    const brackets = [
+      { limit: 0, rate: 0.03, deduction: 0 },
+      { limit: 3000, rate: 0.1, deduction: 210 },
+      { limit: 12000, rate: 0.2, deduction: 1410 },
+      { limit: 25000, rate: 0.25, deduction: 2660 },
+      { limit: 35000, rate: 0.3, deduction: 4410 },
+      { limit: 55000, rate: 0.35, deduction: 7160 },
+      { limit: 80000, rate: 0.45, deduction: 15160 },
+    ];
+
+    for (let i = brackets.length - 1; i >= 0; i -= 1) {
+      if (monthlyTaxable > brackets[i].limit) {
+        return monthlyTaxable * brackets[i].rate - brackets[i].deduction;
+      }
+    }
+
+    return 0;
+  }
+
+  private getImpact(value: number): 'positive' | 'negative' | 'neutral' {
+    if (value > 2) return 'positive';
+    if (value < -2) return 'negative';
     return 'neutral';
+  }
+
+  private getSignedCurrency(value: number): string {
+    return `${value > 0 ? '+' : ''}${this.formatCurrency(value)}`;
+  }
+
+  private getSignedPercent(value: number): string {
+    return `${value > 0 ? '+' : ''}${value.toFixed(1)}%`;
+  }
+
+  private getSignedNumber(value: number): string {
+    return `${value > 0 ? '+' : ''}${value.toFixed(1)}`;
   }
 
   private formatCurrency(value: number): string {
@@ -938,20 +912,42 @@ class CostCalculator {
     }).format(value);
   }
 
-  private getSignedCurrency(value: number): string {
-    return `${value > 0 ? '+' : ''}${this.formatCurrency(value)}`;
-  }
-
-  private getSignedNumber(value: number): string {
-    return `${value > 0 ? '+' : ''}${Number(value.toFixed(1))}`;
-  }
-
-  private getSignedPercent(value: number): string {
-    return `${value > 0 ? '+' : ''}${Number(value.toFixed(1))}%`;
-  }
-
   private clamp(value: number, min: number, max: number): number {
-    return Math.min(max, Math.max(min, value));
+    return Math.min(Math.max(value, min), max);
+  }
+
+  calculateRequiredSalary(sourceCityName: string, targetCityName: string, sourceSalary: number, settings: Settings): number {
+    const sourceCityData = this.cityDataLoader.getCityData(sourceCityName);
+    const targetCityData = this.cityDataLoader.getCityData(targetCityName);
+
+    if (!sourceCityData || !targetCityData) {
+      throw new Error('城市数据未找到');
+    }
+
+    const sourceIncome = this.calculateMonthlyIncome(sourceSalary, sourceCityData, settings);
+    const sourceCosts = this.calculateMonthlyCosts(sourceCityData, settings);
+    const targetSavingsGoal = sourceIncome.税后工资 - sourceCosts.总支出;
+
+    const targetCosts = this.calculateMonthlyCosts(targetCityData, settings);
+    const targetAfterTaxMonthly = targetCosts.总支出 + targetSavingsGoal;
+
+    let targetAnnualSalary = sourceSalary;
+    let lastDiff = Infinity;
+    let step = 10000;
+
+    for (let i = 0; i < 100; i += 1) {
+      const monthlyIncome = this.calculateMonthlyIncome(targetAnnualSalary, targetCityData, settings);
+      const diff = monthlyIncome.税后工资 - targetAfterTaxMonthly;
+
+      if (Math.abs(diff) < 100) break;
+      targetAnnualSalary += diff < 0 ? step : -step;
+      if ((diff > 0 && lastDiff < 0) || (diff < 0 && lastDiff > 0)) {
+        step = Math.max(1000, step / 2);
+      }
+      lastDiff = diff;
+    }
+
+    return targetAnnualSalary;
   }
 }
 
